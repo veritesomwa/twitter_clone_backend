@@ -1,27 +1,29 @@
-const securityMiddleware = async (req, res, next) => {
-  import aj from "../config/arcjet"
+import { slidingWindow } from "@arcjet/node"
+import aj from "../config/arcjet.js"
+import "dotenv/config"
 
-  if (process.env.ARCJET_ENV === "test") return next()
+const securityMiddleware = async (req, res, next) => {
+  if (process.env.ARCJET_ENV === "test") {
+    return next()
+  }
 
   try {
     const role = req.user?.role ?? "guest"
 
-    let limit
-    let message
+    let limit = 5
+    let message =
+      "Guest request limit exceeded (5 per minute). Please sign up for higher limits."
 
     switch (role) {
       case "admin":
-        limit = 2
-        message = "Admin requuest limit exceeded (20 per minute)"
+        limit = 20
+        message = "Admin request limit exceeded (20 per minute). Slow down."
         break
-      case "user":
+
+      case "teacher":
+      case "student":
         limit = 10
-        message = "user request limit exceeded (10 per minute). Please wait."
-        break
-      default:
-        limit = 5
-        message =
-          "guest request limit exceeded (5 per minute). Please sign up for higher limit"
+        message = "User request limit exceeded (10 per minute). Please wait."
         break
     }
 
@@ -33,40 +35,34 @@ const securityMiddleware = async (req, res, next) => {
       }),
     )
 
-    const arcjetRequest = {
-      headers: req.headers,
-      method: req.method,
-      url: req.originalUrl ?? req.url,
-      socket: {
-        remoteAddress: req.socket.remoteAddress ?? req.ip ?? "0.0.0.0",
-      },
-    }
-
-    const decision = await client.protect(arcjetRequest)
+    const decision = await client.protect(req)
 
     if (decision.isDenied() && decision.reason.isBot()) {
       return res.status(403).json({
         error: "Forbidden",
-        message: "Automated requests are not allowed",
+        message: "Automated requests are not allowed.",
       })
     }
+
     if (decision.isDenied() && decision.reason.isShield()) {
       return res.status(403).json({
         error: "Forbidden",
         message: "Request blocked by security policy",
       })
     }
+
     if (decision.isDenied() && decision.reason.isRateLimit()) {
-      return res.status(403).json({
+      return res.status(429).json({
         error: "Too many requests",
         message,
       })
     }
 
     next()
-  } catch (e) {
-    console.error("arcjet middleware error: ", e)
-    res.status(500).json({
+  } catch (error) {
+    console.error("Arcjet middleware error:", error)
+
+    return res.status(500).json({
       error: "Internal error",
       message: "Something went wrong with security middleware",
     })
